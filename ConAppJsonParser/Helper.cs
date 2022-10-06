@@ -71,24 +71,13 @@ public class Helper
         var request = new RestRequest(_config.BioTrackApi, Method.Post);
         request.AddHeader("Accept", "application/json");
 
-        //GreenLeaf
-        //var body = new BioTrackRequest
-        //{
-        //    Action = "sync_inventory",
-        //    LicenseNumber = "333333035",
-        //    UserName = "biotracksucks@schwazze.com",
-        //    Password = "qM56areWXY",
-        //    Training = "0",
-        //    Active = "0",
-        //};
-
         //CowboyVerde
         var body = new BioTrackRequest
         {
             Action = "sync_inventory",
-            LicenseNumber = "422000058",
-            UserName = "cowboyverde@gmail.com",
-            Password = "Dallas3333",
+            LicenseNumber = "",
+            UserName = "",
+            Password = "",
             Training = "1",
             Active = "0",
         };
