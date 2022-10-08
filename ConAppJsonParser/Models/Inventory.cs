@@ -16,13 +16,13 @@ public class Inventory
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public int? Is_Sample { get; set; }  //"is_sample":null,
     
-		[JsonPropertyName("inventoryparentid")]
+	[JsonPropertyName("inventoryparentid")]
     public IList<string> InventoryParentId { get; set; }  //inventoryparentid":null,
         
-		[JsonPropertyName("sessiontime")]
+	[JsonPropertyName("sessiontime")]
     public int SessionTime { get; set; }  //sessiontime":1592256324,
 	
-		[JsonPropertyName("deleted")]
+	[JsonPropertyName("deleted")]
     public int Deleted { get; set; }  //deleted":0,
 
     [JsonPropertyName("plantid")]

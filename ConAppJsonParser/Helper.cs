@@ -1,27 +1,15 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
-using System.Linq;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using ConAppJsonParser.Models;
 using ConAppJsonParser.Models.Availability;
-using CsvHelper.Configuration;
 using CsvHelper;
+using CsvHelper.Configuration;
 using Microsoft.Extensions.Configuration;
-using Newtonsoft.Json.Linq;
 using RestSharp;
-using RestSharp.Authenticators;
 using RestSharp.Authenticators.OAuth2;
 using Serilog;
-using static System.Console;
-using System.ComponentModel.DataAnnotations;
-using System.Runtime.Serialization;
 
 namespace ConAppJsonParser;
 
@@ -32,69 +20,72 @@ public class Helper
     {
         _config = config;
     }
-
-    // Access Token
-    //var accountsBaseUri = configSettings["Accounts.Host"];
-    //var clientId = configSettings["ClientID"];
-    //var clientSecret = configSettings["ClientSecret"];
-    //var accountsClient = new AccountsClient(accountsBaseUri);
-
-    //<!-- External API settings -->
-    //<add key = "Accounts.Host" value="https://accountsint.iqmetrix.net" />
-    //<add key = "ClientID" value="CovaTraceability" />
-    //<add key = "ClientSecret" value="YbhxL6OLLSorUbTkWzoGxBIa" />
     
     
     public async Task<CatalogProductQuantitiesDetailed> GetCatalogProductQuantitiesDetailed(int companyId, int locationId, string catalogItem) 
     {
         Log.Information("Calling Availabilty with Company: {companyId}, Location: {locationId}, Catalog Item: {catalogItemId}", 
             companyId, locationId, catalogItem);
-        AccessTokenResult token = await GetToken();
-        //var companyId = 705656;
-        //var locationId = 705664;
-        RestClient restClient = new(_config.AvailabilityBaseUrl);
-        bool catalogItemId = Guid.TryParse(catalogItem, out Guid guildCatalogItem);
 
-        //var request = new RestRequest($"/v1/Companies({companyId})/Entities({locationId})/CatalogProductQuantitiesDetailed({guildResult})", Method.Get);
-        var request = new RestRequest($"/v1/Companies({companyId})/entities({locationId})/CatalogProductQuantitiesDetailed({guildCatalogItem})");
+        //Below can be enabled in INT to dynamicaly generate token. Otherwise set token in appsettings.json
+        //AccessTokenResult token = await GetToken(); 
+
+        
+        bool catalogItemId = Guid.TryParse(catalogItem, out Guid guildCatalogItem);
+        if (!catalogItemId)
+            Log.Error("Conversion of Catalog Item: {catalogItem} failed.", catalogItem);
+
+        var request = new RestRequest($"/v1/Companies({companyId})/entities({locationId})/CatalogProductQuantitiesDetailed({guildCatalogItem})", Method.Get);
         request.AddHeader("Accept", "application/json");
 
-        restClient.Authenticator = new OAuth2AuthorizationRequestHeaderAuthenticator(token.AccessToken, "Bearer");
+        RestClient restClient = new(_config.AvailabilityBaseUrl)
+        {
+            Authenticator = new OAuth2AuthorizationRequestHeaderAuthenticator(_config.AccessToken, "Bearer")
+        };
 
-        var results = restClient.GetAsync<CatalogProductQuantitiesDetailed>(request);
-        return results.Result;
+        try
+        {
+            var results = await restClient.GetAsync<CatalogProductQuantitiesDetailed>(request).ConfigureAwait(false);
+            return results;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Failed getting Catalog Item from Availability Service. Please check if Client Token is Valid. Reason: {Message}", ex.Message);
+            throw;
+        }
     }
 
-    public Task<Inventory> GetBioTrackInventory()
+    public async Task<Inventory> GetBioTrackInventory()
     {
-        var client = new RestClient();
         var request = new RestRequest(_config.BioTrackApi, Method.Post);
         request.AddHeader("Accept", "application/json");
 
-        //CowboyVerde
         var body = new BioTrackRequest
         {
             Action = "sync_inventory",
-            LicenseNumber = "",
-            UserName = "",
-            Password = "",
-            Training = "1",
+            LicenseNumber = _config.LicenseNumber,
+            UserName = _config.UserName,
+            Password = _config.Password,
+            Training = "0",
             Active = "0",
         };
 
         request.AddBody(body);
         Log.Information("Requesting BioTrack for ALL items.");
+        var client = new RestClient();
         var watch = Stopwatch.StartNew();
-        var response = client.ExecutePost<Inventory>(request);
+        var response = await client.ExecutePostAsync<Inventory>(request).ConfigureAwait(false);
         watch.Stop();
         var elapsedTime = watch.Elapsed.TotalSeconds;
-        Log.Information("Fetched no. of items: {itemsCount} in: {elapsedTime}", response.Data.InventoryItems.Count, elapsedTime);
-        return Task.FromResult(response.Data);
-
-        //Inventory responseData = JsonSerializer.Deserialize<Inventory>(response.Content);
-        //WriteLine($"Company: {body.LicenseNumber} has ALL Inventory count: {responseData.InventoryItems.Count}");
-        //WriteLine($"Payload response size: {Encoding.UTF8.GetBytes(response.Content).Length} bytes.\nFetch time in ms:\t{elapsedTime} sec.");
-        //return Task
+        if (response.IsSuccessful)
+        {
+            Log.Information("Fetched no. of items: {itemsCount} in: {elapsedTime}", response.Data.InventoryItems.Count, elapsedTime);
+            return response.Data;
+        }
+        else {
+            Log.Error("Failed fetching inventory from BioTrackTHC: {@response}", response);
+            throw new ApplicationException("Failed to Fetch Inventory from BioTrack.");
+        }
     }
 
     public static IEnumerable<FailedInvoiceInput> GetFailedInvoices(string fileToParse)
@@ -107,11 +98,8 @@ public class Helper
         return failedItems;
     }
 
-    public Task AdjustPackageQuantity(string packageId, string qty)
-    {
-        packageId = "7842825485478757";
-        qty = "5000";
-
+    public async Task<AdjustmentResult> AdjustPackageQuantity(FailedInvoiceInput inputRecord,  CatalogProductQuantitiesDetailed covaRecord)
+    { 
         var client = new RestClient();
         var request = new RestRequest(_config.BioTrackApi, Method.Post);
         request.AddHeader("Accept", "application/json");
@@ -122,69 +110,33 @@ public class Helper
             LicenseNumber = _config.LicenseNumber,
             UserName = _config.UserName,
             Password = _config.Password,
-            Training = "1"
+            Training = "0"
         };
 
-        body.Payload.Add(new AdjustmentData { BarcodeId = packageId, Quantity = qty });
+        var qtyToAdjust = CalculateQty(covaRecord, inputRecord);
+        body.Payload.Add(new AdjustmentData { BarcodeId = inputRecord.PackageId, Quantity = qtyToAdjust });
 
         request.AddBody(body);
-        Log.Information("Request to Adjust Item: {item} with Qty: {qty}", packageId, qty);
+        Log.Information("Item to Adjust: {item}. Qty Cova: {qtyCova} Qty to set: {qtyToAdjust}", inputRecord.PackageId, Convert.ToInt32(covaRecord.QuantityInStock), qtyToAdjust);
 
-        var response = client.ExecutePost<Inventory>(request);
-        return Task.FromResult(response.Data);
-    }
-
-
-    public static void ProcessFailedAdjustments(string data, Inventory responseData)
-    {
-        var failedItems = JsonSerializer.Deserialize<IEnumerable<FailedAdjustmentItem>>(data).ToList();
-
-        List<KeyValuePair<string, FailedAdjustmentItem>> IdList = new();
-        foreach (var item in failedItems)
+        var response = await client.ExecutePostAsync<AdjustmentResult>(request).ConfigureAwait(false);
+        Log.Information("Adjustment request status: {responseStatus} and Transaciton ID: {transactionId}", 
+            response.StatusCode, response.Data.Transactionid);
+        if (response.IsSuccessful)
         {
-            var myItem = Regex.Replace(item.ProcessorResponse, @"[^\d]", "");
-            Match match = Regex.Match(myItem, @"^\d{16}$");
-            if (match.Success)
-            {
-                IdList.Add(new KeyValuePair<string, FailedAdjustmentItem>(myItem, item));
-            }
+            Log.Information("Successfully adjusted Package: {packageId} in Biotrack.", inputRecord.PackageId);
+        }
+        else {
+            Log.Error("Failed Adjust Packed Id: {package} with return status: {@response}", inputRecord.PackageId, response);
         }
 
-        WriteLine($"List of Inventory Items (Count: {IdList.Count}) extracted from FailedAdjustment JSON file:\n");
-        var items = IdList.Select((value, index) => new { value, index }).ToList();
-        items.ForEach(x => WriteLine($"{x.index}.\t{x.value.Key}"));
-        WriteLine();
-
-        foreach (var item in IdList)
-        {
-            var btItem = responseData.InventoryItems.Where(x => x.Id == item.Key).First();
-
-            var qty = int.Parse(btItem.Remaining_Quantity);
-            if (btItem is not null)
-            {
-                var consColor = qty > 0
-                    ? ForegroundColor = ConsoleColor.Green
-                    : ForegroundColor = ConsoleColor.DarkRed;
-                ForegroundColor = consColor;
-
-                WriteLine($"Reason: {item.Value.ProcessorResponse}" +
-                    $"\nBioTract Data: {btItem.Id} has Remaining Qty: {btItem.Remaining_Quantity}" +
-                    $"\nAdjustment's Azure ID: {failedItems.Where(x => x.Id == item.Value.Id).First().Id}");
-                WriteLine();
-            }
-            else
-            {
-                ForegroundColor = ConsoleColor.Blue;
-                WriteLine($"Item: {item.Key} was not found in the processing file.");
-            }
-        }
-        ForegroundColor = ConsoleColor.White;
+        return response.Data;
     }
 
-    public static void SaveToCSV(List<AdjustmentResult> users)
+    public static void SaveToCSV(List<AdjustmentReport> reportRecord)
     {
-        ArgumentNullException.ThrowIfNull(users, nameof(users));
-        if (users.Count == 0) return;
+        ArgumentNullException.ThrowIfNull(reportRecord, nameof(reportRecord));
+        if (reportRecord.Count == 0) return;
         var csvConfig = new CsvConfiguration(CultureInfo.CurrentCulture)
         {
             HasHeaderRecord = true,
@@ -192,18 +144,14 @@ public class Helper
             Encoding = Encoding.UTF8
         };
 
-        //using (var mem = new MemoryStream())
         using var writer = new StreamWriter("c:\\temp\\JsonProcessing\\AdjustmentResults.csv");
-        //using (var writer = new StreamWriter(mem))
         using var csvWriter = new CsvWriter(writer, csvConfig);
-        csvWriter.WriteHeader<AdjustmentResult>();
+        csvWriter.WriteHeader<AdjustmentReport>();
         csvWriter.NextRecord();
-        csvWriter.WriteRecords(users);
+        csvWriter.WriteRecords(reportRecord);
 
         writer.Flush();
-        //var result = Encoding.UTF8.GetString(mem.ToArray());
-        //Console.WriteLine(result);
-        Console.WriteLine("Done Saving csv check the folder.");
+        Log.Information("Done Saving csv check the folder.");
     }
 
     public async Task<RestResponse> GetCovaInventoryItemBulk(string companyId)
@@ -220,6 +168,26 @@ public class Helper
         var results = restClient.Get(request);
 
         return results;
+    }
+
+    public static AdjustmentReport GenerateReportRecord(FailedInvoiceInput failedInvoice, 
+        CatalogProductQuantitiesDetailed catalogItem, InventoryItem  btItem)
+    {
+        AdjustmentReport record = new()
+        {
+            InvoiceId = failedInvoice.InvoiceId,
+            CatalogItemId = failedInvoice.CatalogItemId,
+            PackageId = failedInvoice.PackageId,
+            QtyBiotrack = int.Parse(btItem.Remaining_Quantity),
+            QtyCova = Convert.ToInt32(catalogItem.QuantityInStock),
+            NewQty = Convert.ToInt32(failedInvoice.Quantity) + Convert.ToInt32(catalogItem.QuantityInStock)
+        };
+        return record;
+    }
+
+    private static int CalculateQty(CatalogProductQuantitiesDetailed cova, FailedInvoiceInput inventory)
+    {
+        return Convert.ToInt32(cova.QuantityInStock) + Convert.ToInt32(inventory.Quantity);
     }
 
     private Task<AccessTokenResult> GetToken()
@@ -242,6 +210,5 @@ public class Helper
         //var tokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn).AddMinutes(-30);
         return Task.FromResult(responseData);
     }
-
 }
 

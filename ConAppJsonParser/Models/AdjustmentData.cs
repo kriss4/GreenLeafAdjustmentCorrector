@@ -8,7 +8,7 @@ public class AdjustmentData
     public string BarcodeId { get; set; } //"barcodeid": "7842825485478757",
     
     [JsonPropertyName("quantity")]
-    public string Quantity { get; set; }     //  "quantity": "8",
+    public int Quantity { get; set; }     //  "quantity": "8",
 
     [JsonPropertyName("reason")]
     public string Reason { get; set; } = "Correcting a mistake";  //   "reason": "Theft",
